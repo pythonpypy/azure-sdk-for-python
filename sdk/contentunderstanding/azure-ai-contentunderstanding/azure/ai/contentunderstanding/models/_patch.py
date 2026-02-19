@@ -27,8 +27,8 @@ from ._models import (
     ContentField,
 )
 
-# Note: The .value property is added to ContentField classes at runtime in patch_sdk()
-# Type annotations are set on the classes' __annotations__ for type checker support
+# Note: The generated value_* attributes (e.g., value_string, value_number) are renamed
+# to just `value` at runtime in patch_sdk() so users access field.value uniformly.
 
 PollingReturnType_co = TypeVar("PollingReturnType_co", covariant=True)
 
@@ -161,45 +161,43 @@ class AnalyzeLROPoller(LROPoller[PollingReturnType_co]):
         return cls(client, initial_response, deserialization_callback, polling_method)
 
 
-def _add_value_property_to_field(
-    field_class: type, value_attr: str, return_type: Any = Any
-) -> None:
-    """Add a .value property implementation at runtime.
+def _rename_value_field_to_value(field_class: type, old_attr_name: str) -> None:
+    """Rename a generated ``value_*`` rest_field to ``value`` on a ContentField subclass.
 
-    This function adds the actual property implementation so IntelliSense works.
-    The type declarations in TYPE_CHECKING tell type checkers about the types.
+    The underlying JSON wire name (e.g., ``valueString``) is preserved because the
+    ``_RestField`` descriptor stores it in ``_rest_name``.  Only the Python attribute
+    name changes so that users access ``field.value`` instead of ``field.value_string``.
 
-    :param field_class: The field class to add the property to.
+    :param field_class: The ContentField subclass to patch (e.g. ``StringField``).
     :type field_class: type
-    :param value_attr: The attribute name to read from (e.g., "value_string").
-    :type value_attr: str
-    :param return_type: The expected return type for better type checking.
-    :type return_type: Any
+    :param old_attr_name: The generated attribute name to rename (e.g. ``"value_string"``).
+    :type old_attr_name: str
     :return: None
     :rtype: None
     """
+    descriptor = field_class.__dict__.get(old_attr_name)
+    if descriptor is None:
+        return
 
-    def value_getter(self: Any) -> Any:
-        """Get the value of this field.
+    # Install the same rest_field descriptor under the name ``value``
+    setattr(field_class, "value", descriptor)
 
-        :return: The value of the field.
-        :rtype: Any
-        """
-        return getattr(self, value_attr, None)
+    # Remove the old attribute name
+    try:
+        delattr(field_class, old_attr_name)
+    except AttributeError:
+        pass
 
-    # Set return type annotation for better type checking
-    value_getter.__annotations__["return"] = return_type
+    # Migrate annotation so IDE / type-checker support works
+    annotations = getattr(field_class, "__annotations__", {})
+    if old_attr_name in annotations:
+        annotations["value"] = annotations.pop(old_attr_name)
 
-    # Create property with type annotation
-    value_property = property(value_getter)
-
-    # Add property to class at runtime (for IntelliSense)
-    setattr(field_class, "value", value_property)
-
-    # Also add to __annotations__ for better IDE support
-    if not hasattr(field_class, "__annotations__"):
-        field_class.__annotations__ = {}
-    field_class.__annotations__["value"] = return_type
+    # Clear the _calculated cache so _attr_to_rest_field is rebuilt on next
+    # instantiation with the new attribute name.
+    calc_key = f"{field_class.__module__}.{field_class.__qualname__}"
+    if hasattr(field_class, "_calculated"):
+        field_class._calculated.discard(calc_key)  # type: ignore[union-attr]
 
 
 def patch_sdk():
@@ -209,52 +207,21 @@ def patch_sdk():
     # Add RecordMergePatchUpdate as an alias
     _models.RecordMergePatchUpdate = RecordMergePatchUpdate  # type: ignore[attr-defined]
 
-    # Runtime implementation: Add .value property to all ContentField subclasses
-    # The TYPE_CHECKING block above declares the types for static analysis
-    # These runtime implementations make IntelliSense work
-    _add_value_property_to_field(StringField, "value_string", Optional[str])
-    _add_value_property_to_field(IntegerField, "value_integer", Optional[int])
-    _add_value_property_to_field(NumberField, "value_number", Optional[float])
-    _add_value_property_to_field(BooleanField, "value_boolean", Optional[bool])
-    _add_value_property_to_field(DateField, "value_date", Optional[str])
-    _add_value_property_to_field(TimeField, "value_time", Optional[str])
-    _add_value_property_to_field(ArrayField, "value_array", Optional[List[Any]])
-    _add_value_property_to_field(ObjectField, "value_object", Optional[Dict[str, Any]])
-    _add_value_property_to_field(JsonField, "value_json", Optional[Any])
+    # Rename generated value_* rest_field attributes to ``value`` on each
+    # ContentField subclass so the public API is simply ``field.value``.
+    _rename_value_field_to_value(StringField, "value_string")
+    _rename_value_field_to_value(IntegerField, "value_integer")
+    _rename_value_field_to_value(NumberField, "value_number")
+    _rename_value_field_to_value(BooleanField, "value_boolean")
+    _rename_value_field_to_value(DateField, "value_date")
+    _rename_value_field_to_value(TimeField, "value_time")
+    _rename_value_field_to_value(ArrayField, "value_array")
+    _rename_value_field_to_value(ObjectField, "value_object")
+    _rename_value_field_to_value(JsonField, "value_json")
 
-    # Add dynamic .value to ContentField base class
-    # This checks which value_* attribute exists and returns it
-    def _content_field_value_getter(self: ContentField) -> Any:
-        """Get the value of this field regardless of its specific type.
-
-        :param self: The ContentField instance.
-        :type self: ContentField
-        :return: The value of the field.
-        :rtype: Any
-        """
-        for attr in [
-            "value_string",
-            "value_integer",
-            "value_number",
-            "value_boolean",
-            "value_date",
-            "value_time",
-            "value_array",
-            "value_object",
-            "value_json",
-        ]:
-            if hasattr(self, attr):
-                return getattr(self, attr)
-        return None
-
-    # Set return type annotation
-    _content_field_value_getter.__annotations__["return"] = Any
-
-    # Add property to ContentField base class
-    content_field_value = property(_content_field_value_getter)
-    setattr(ContentField, "value", content_field_value)
-
-    # Also add to __annotations__ for IDE support
+    # Add ``value`` annotation on the ContentField base class for type-checker
+    # support when code holds a generic ContentField reference.  At runtime the
+    # subclass descriptor handles the actual access.
     if not hasattr(ContentField, "__annotations__"):
         ContentField.__annotations__ = {}
     ContentField.__annotations__["value"] = Any
