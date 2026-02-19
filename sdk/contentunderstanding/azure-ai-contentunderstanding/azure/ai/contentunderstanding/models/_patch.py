@@ -11,7 +11,7 @@ Follow our quickstart for examples: https://aka.ms/azsdk/python/dpcodegen/python
 
 import re
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Dict, TypeVar
 from azure.core import CaseInsensitiveEnumMeta
 from azure.core.polling import LROPoller, PollingMethod
 from ._models import (
@@ -197,7 +197,7 @@ def _rename_value_field_to_value(field_class: type, old_attr_name: str) -> None:
     # instantiation with the new attribute name.
     calc_key = f"{field_class.__module__}.{field_class.__qualname__}"
     if hasattr(field_class, "_calculated"):
-        field_class._calculated.discard(calc_key)  # type: ignore[union-attr]
+        field_class._calculated.discard(calc_key)  # type: ignore[union-attr] # pylint: disable=protected-access
 
 
 def patch_sdk():
